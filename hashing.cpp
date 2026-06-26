@@ -9,13 +9,13 @@
 #include <sstream>
 #include <random>
 #include <iomanip>
-/**
-* Определение типов:
-*   - FEATURE: вектор double для хранения признаков.
-*   - LABEL: целочисленный тип для метки (0 или 1).
-*   - целочисленная константа HASH_DIM (размерность хешированного пространства).
-*/
 
+/**
+ * Type definitions:
+ *   - FEATURE: vector of doubles for storing features.
+ *   - LABEL: integer type for class label (0 or 1).
+ *   - HASH_DIM: dimensionality of the hashed feature space.
+ */
 typedef std::vector<double> FEATURE;
 typedef int LABEL;
 const int HASH_DIM = pow(2, 5) + 15;
@@ -25,21 +25,22 @@ struct Sample {
     LABEL   label;
 };
 
-
 /**
- * Перевести текст в фичи
- * 
- * Каждый токен к нижнему регистру -> хеш от строки -> feats[index] += 1, где index = хеш % HASH_DIM
- * Затем выполнить L2-нормализацию feats.
- * 
- * @param text 
- * @return vec<double> feats
- * 
- * @solve  
+ * Convert raw text into a fixed-size feature vector using the Feature Hashing trick.
+ *
+ * Pipeline:
+ *   1. Tokenize the input string by whitespace.
+ *   2. Lowercase each token.
+ *   3. Hash the token with MurmurHash3 (seed = 8) and map to an index via modulo HASH_DIM.
+ *   4. Increment the corresponding bin (count-based representation).
+ *   5. Apply L2 normalization to the resulting vector.
+ *
+ * @param text  Raw input text.
+ * @return      A dense vector of size HASH_DIM, L2-normalized.
  */
 std::vector<double> text_to_features(const std::string& text) {
     // Инициализируем вектор признаков нулями
-    FEATURE feats (HASH_DIM, 0.0);
+    FEATURE feats(HASH_DIM, 0.0);
     
     // Токенизация текста
     std::istringstream iss(text);
@@ -78,16 +79,14 @@ std::vector<double> text_to_features(const std::string& text) {
     return feats;
 }
 
-
-// Можно использовать внешние источники, но обязательно укажите ссылку на них.
-// Если источник = генеративные модели / не будет источников - будет больно на защите.
 class LogisticRegression {
 public:
     size_t dim = HASH_DIM;
     double lr = 0.01;
     double reg_lambda = 0.1;
-    double class_weight_0 = 1.0;  // вес для класса 0 (ham)
-    double class_weight_1 = 1.0;  // вес для класса 1 (spam)
+    double class_weight_0 = 1.0;  // weight for class 0 (ham)
+    double class_weight_1 = 1.0;  // weight for class 1 (spam)
+    
     LogisticRegression()
     : weights(dim),
       learning_rate(lr),
@@ -104,34 +103,33 @@ public:
     }
 
     /**
-     * Обучаем логрег.
-     * 
-     * @param vec<Sample> trainData - наши фичи : labels
-     * @param vec<Sample> validData - на чем считаем метрики
-     * 
-     * тут набросок, можете предложить свой вариант реализации. 
-     * например - вывод лосса на обучении, или каджые M эпох уменьшает lr
-     * 
-     * при указании источника спрашивать как работает не будем.
-     * 
-     * функция должна обновить weights
-     * @solve
+     * Train the logistic regression model using full-batch gradient descent.
+     *
+     * Training dynamics:
+     *   - Cross-entropy loss with L2 regularization.
+     *   - Learning rate schedule: 0.01 -> 0.005 (epoch 400) -> 0.001 (epoch 4000).
+     *   - Early stopping: every 10 epochs, validation metrics are evaluated;
+     *     weights with the best (accuracy, precision) pair are preserved.
+     *   - After training, the optimal classification threshold is selected
+     *     by sweeping [0.1, 1.0) with step 0.01, subject to Recall >= 0.6.
+     *
+     * @param trainData  Training samples (features + labels).
+     * @param validData  Validation samples used for early stopping and threshold tuning.
      */
     void train(const std::vector<Sample>& trainData, const std::vector<Sample>& validData) { 
-        bool quiet_mode = true; // "Тихий" режим запуска обучения
+        bool quiet_mode = false; // Silent training mode
         
         double epsilon = pow(10, -10);
-        std::vector <double> L(dim, 0.0);
+        std::vector<double> L(dim, 0.0);
         std::vector<double> error_pred;
         auto best_weights = weights;
 
         double prediction;
         double loss = 0;
-
         double class_weight;
 
         double best_acc = 0;
-        double best_precison = 0;
+        double best_precision = 0;
         int best_epoch;     
         
         // Цикл по эпохам
@@ -141,26 +139,26 @@ public:
             error_pred.clear();
             std::fill(L.begin(), L.end(), 0.0);
 
-            //Вычисление ошибки для каждого сэмпла
+            // Вычисление ошибки для каждого сэмпла
             for (const auto& sample : trainData) {
                 prediction = sigmoid(dot_product(weights, sample.features));
                 loss += sample.label * std::log(prediction + epsilon) + (1 - sample.label) * std::log(1 - prediction + epsilon); 
                 error_pred.push_back(prediction - sample.label);
             }
             
-            //Вычисление градиента
+            // Вычисление градиента
             for (int idx_sample = 0; idx_sample < trainData.size(); idx_sample++) {
                 for(int idx_w = 0; idx_w < weights.size(); ++idx_w){
                     L[idx_w] += error_pred[idx_sample] * trainData[idx_sample].features[idx_w];
                 }
             }
 
-            //Нормализация градиента
+            // Нормализация градиента
             for(int idx_w = 0; idx_w < weights.size(); ++idx_w){
                 L[idx_w] /= trainData.size();
             }
 
-            //Град спуск
+            // Град спуск
             for(int idx_w = 0; idx_w < weights.size(); ++idx_w){
                 weights[idx_w] -= lr * (L[idx_w] + lambda * weights[idx_w]); 
             }
@@ -176,21 +174,21 @@ public:
                 auto val_metrics = evaluate(validData);
                 auto train_metrics = evaluate(trainData);
                 if ((0.5 <= val_metrics[0]/(val_metrics[0] + val_metrics[3]))
-                    || (best_precison < val_metrics[0]/(val_metrics[0] + val_metrics[2]))){
+                    || (best_precision < val_metrics[0]/(val_metrics[0] + val_metrics[2]))){
                     best_acc = (val_metrics[0] + val_metrics[1])/ (val_metrics[0] + val_metrics[1] + val_metrics[2] + val_metrics[3]);
-                    best_precison = val_metrics[0]/(val_metrics[0] + val_metrics[2]);
+                    best_precision = val_metrics[0]/(val_metrics[0] + val_metrics[2]);
                     best_epoch = epoch + 1;
                     best_weights = weights;
                 }
             }
 
-            //Выовд метрик
+            // Вывод метрик
             if (((epoch + 1) % 200 == 0) && (!quiet_mode)) {
                auto val_metrics = evaluate(validData);
                auto train_metrics = evaluate(trainData);               
                std::cout << "\nEpoch: " << epoch + 1 << " loss: " << -loss/trainData.size() << ' ' << lr << std::endl;
               
-               std::cout<<"____________________________________________________\n|\t|   Accuracy   |   Precison   |   Reccal   |\n---------------------------------------------------\n";
+               std::cout<<"____________________________________________________\n|\t|   Accuracy   |   Precision   |   Recall   |\n---------------------------------------------------\n";
                std::cout<< std::fixed << std::setprecision(6) <<
                "| Train |    " <<  (train_metrics[0] + train_metrics[1])/ (train_metrics[0] + train_metrics[1] + train_metrics[2] + train_metrics[3])
                 << "  |   " << train_metrics[0]/(train_metrics[0] + train_metrics[2])
@@ -203,27 +201,26 @@ public:
         }
         
         if (!quiet_mode)
-            std::cout<< best_epoch << "\t" << best_acc << "\t" << best_precison << std::endl;
+            std::cout<< best_epoch << "\t" << best_acc << "\t" << best_precision << std::endl;
         
-            weights = best_weights;
+        weights = best_weights;
         find_best_threshold(validData);
 
         if (!quiet_mode){
             auto val_metrics = evaluate(validData);
             std::cout<<"After find_best_threshold (" << threshold << "):\n";
-            std::cout<<"____________________________________________________\n|\t|   Accuracy   |   Precison   |   Reccal   |\n---------------------------------------------------\n";
-                std::cout<< std::fixed << std::setprecision(6) << "|  Val  |    " << (val_metrics[0] + val_metrics[1])/ (val_metrics[0] + val_metrics[1] + val_metrics[2] + val_metrics[3])
-                    << "  |   " << val_metrics[0]/(val_metrics[0] + val_metrics[2])
-                    << "   |   " << val_metrics[0]/(val_metrics[0] + val_metrics[3]) << " |\n";
+            std::cout<<"____________________________________________________\n|\t|   Accuracy   |   Precision   |   Recall   |\n---------------------------------------------------\n";
+            std::cout<< std::fixed << std::setprecision(6) << "|  Val  |    " << (val_metrics[0] + val_metrics[1])/ (val_metrics[0] + val_metrics[1] + val_metrics[2] + val_metrics[3])
+                << "  |   " << val_metrics[0]/(val_metrics[0] + val_metrics[2])
+                << "   |   " << val_metrics[0]/(val_metrics[0] + val_metrics[3]) << " |\n";
         }
     }
 
     /**
-     * Предсказываем класс для новых фичей
-     * 
-     * должна вернуть vec<double> metrics = {0, 0, 0, 0}; // TP, TN, FP, FN 
-     * @param data - vec<Sample> данные для валидации
-     * @solve
+     * Evaluate the model on a labeled dataset.
+     *
+     * @param data  Validation samples.
+     * @return      A vector of four counts: {TP, TN, FP, FN}.
      */
     std::vector<double> evaluate(const std::vector<Sample>& data) const {
         // Инициализируем массив для метрик
@@ -284,24 +281,21 @@ private:
         }
         return res;
     }
-    // можете использовать другую активацию
+    
     static double sigmoid(double z) {
         return 1.0 / (1.0 + exp(-z));
     }
 };
-    
 
 /**
- * Загрузить данные из csv
- * csv формата class,text
- * 
- * затем загруженные данные нужно пропустить через text_to_features
- * 
- * @param filename путь до файла, указывать как "entrypoiny/FILENAME"
- * @param vec<Sample> data - куда положить загруженные данные
- * @return bool если загрузка успешна
- * 
- * @solve  
+ * Parse a CSV file with the schema "class,text" and populate the dataset.
+ *
+ * Each row is tokenized and converted to a feature vector via text_to_features.
+ * The first row is treated as a header and skipped.
+ *
+ * @param filename  Path to the CSV file (e.g. "entrypoint/data_train.csv").
+ * @param data      Output vector to append samples to.
+ * @return          true if the file was opened and parsed successfully.
  */
 bool read_csv(const std::string& filename, std::vector<Sample>& data) { 
     std::ifstream file(filename);
@@ -336,4 +330,4 @@ bool read_csv(const std::string& filename, std::vector<Sample>& data) {
     }
     file.close();
     return true;
- }
+}
