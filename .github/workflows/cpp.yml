@@ -1,0 +1,24 @@
+name: C++ CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install g++
+      run: sudo apt-get install -y g++
+
+    - name: Compile main
+      run: g++ -O3 -std=c++11 main.cpp -o spam_filter
+
+    - name: Compile and run tests
+      run: |
+        g++ -O3 -std=c++11 my_tests.cpp -o tests
+        ./tests
+
+    - name: Run spam filter
+      run: ./spam_filter
